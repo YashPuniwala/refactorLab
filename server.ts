@@ -20,12 +20,8 @@ import {
 import { runUntrustedCodeTests } from './src/server/testRunner.ts';
 import { generateCSVExport, evaluateBestModel } from './src/server/exporter.ts';
 import { performSafetyChecks, sanitizeCode } from './src/server/safety.ts';
-import { generateTestFileAndValidate, filterNodeWarnings, detectExportTargets } from './src/server/testGenerator.ts';
+import { generateTestFileAndValidate, filterNodeWarnings } from './src/server/testGenerator.ts';
 import { computeAgreementMatrix } from './src/server/agreement.ts';
-import { executeAIRefactoring } from './src/server/aiService.ts';
-import { runMutationTesting } from './src/server/mutationTester.ts';
-import { compareBehavior } from './src/server/behaviorComparator.ts';
-import { explainFailure } from './src/server/failureExplainer.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -266,10 +262,6 @@ app.post('/api/run', async (req: Request, res: Response) => {
       behaviourPreserved = 'Error (runner/timeout error)';
     }
 
-    const failureExplanations = testExec.failingTests.map((ft) =>
-      explainFailure(ft.title, ft.failureMessage)
-    );
-
     const runResult: ModelResult = {
       runId: `run_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       timestamp: new Date().toISOString(),
@@ -301,7 +293,6 @@ app.post('/api/run', async (req: Request, res: Response) => {
       originalMetrics: origMetrics,
       complexityComparison: complexityComp,
       maintainabilityComparison: maintComp,
-      failureExplanations,
     };
 
     // Step 5: Save results & update history
@@ -339,158 +330,7 @@ app.post('/api/run', async (req: Request, res: Response) => {
   }
 });
 
-// 6. POST /api/generate-prompt (Screen 2: Generate refactoring prompt based on code analysis and selected mode)
-app.post('/api/generate-prompt', (req: Request, res: Response) => {
-  try {
-    const { code, mode = 'preserve_behavior' } = req.body;
-    if (!code || typeof code !== 'string') {
-      return res.status(400).json({ success: false, error: 'Code is required.' });
-    }
-
-    const { targets, overallNonDeterministic, nonDeterministicReason } = detectExportTargets(code);
-    const exportNames = targets.map((t) => (t.isDefault ? 'default' : t.name)).join(', ') || 'functions';
-
-    let prompt = '';
-    if (mode === 'preserve_behavior') {
-      prompt = `Refactor the following JavaScript code to improve readability, structure, and maintainability while STRICTLY PRESERVING existing observable behavior.
-
-Key Requirements:
-1. Behavioral Equivalence: All return values, error conditions, exceptions thrown, and edge case responses must remain 100% identical.
-2. Public Interface: Retain exact exports (${exportNames}), function signatures, parameter counts, and parameter naming conventions.
-3. Edge Case Handling: Keep exact handling for null, undefined, empty strings, numeric boundaries, and unusual types intact.
-4. No Unrelated Changes: Do not add unsolicited features, change architectural patterns, or silently fix bugs that alter observable outputs.
-5. Code Integrity: Never use placeholders or omit code. Return the complete, production-ready JavaScript code.`;
-    } else {
-      prompt = `Refactor the following JavaScript code to improve code quality, maintainability, and fix confirmed edge-case defects.
-
-Key Requirements:
-1. Maintain Public Contract: Retain exports (${exportNames}) and signature compatibility so existing callers do not break.
-2. Defensive Bug Fixing: Properly handle null/undefined pointer dereferences, empty strings, and type coercion bugs.
-3. Clean Architecture: Simplify complex control flow and reduce nested conditionals.
-4. Documented Intent: Ensure all fixed edge cases produce clean, predictable return values.
-5. Code Integrity: Return ONLY the complete, production-ready JavaScript code without Markdown commentary.`;
-    }
-
-    res.json({
-      success: true,
-      prompt,
-      targets,
-      isNonDeterministic: overallNonDeterministic,
-      nonDeterministicReason,
-    });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// 7. POST /api/ai/refactor (Screen 3: Real AI model execution with Gemini-3.8-Flash)
-app.post('/api/ai/refactor', async (req: Request, res: Response) => {
-  try {
-    const { provider = 'gemini', originalCode, prompt, mode = 'preserve_behavior', apiKey } = req.body;
-    if (!originalCode || !prompt) {
-      return res.status(400).json({ success: false, error: 'Original code and prompt are required.' });
-    }
-
-    const aiRes = await executeAIRefactoring({
-      provider,
-      originalCode,
-      prompt,
-      mode,
-      apiKey,
-    });
-
-    if (aiRes.success) {
-      const state = getExperimentState();
-      state.step = 3;
-      state.selectedModel = provider;
-      state.refactoringPrompt = prompt;
-      state.refactoringMode = mode;
-      if (state.models[provider as 'gemini' | 'chatgpt' | 'claude']) {
-        state.models[provider as 'gemini' | 'chatgpt' | 'claude'].code = aiRes.code;
-        state.models[provider as 'gemini' | 'chatgpt' | 'claude'].prompt = prompt;
-        state.models[provider as 'gemini' | 'chatgpt' | 'claude'].responseTime = String(aiRes.responseTimeSeconds);
-      }
-      saveExperimentState(state);
-    }
-
-    res.json(aiRes);
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// 8. POST /api/run-mutation-test (Screen 4: Mutation testing / test-suite sensitivity engine)
-app.post('/api/run-mutation-test', async (req: Request, res: Response) => {
-  try {
-    const state = getExperimentState();
-    const originalCode = req.body.code || state.lockedOriginalCode || state.originalCode;
-    const testFileCode = req.body.tests || state.lockedTestFileCode || state.generatedTests.testFileCode;
-
-    if (!originalCode || !testFileCode) {
-      return res.status(400).json({
-        success: false,
-        error: 'Original code and test suite are required for mutation testing.',
-      });
-    }
-
-    const result = await runMutationTesting(originalCode, testFileCode);
-    state.mutationTesting = result;
-    saveExperimentState(state);
-
-    res.json({ success: true, result });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// 9. POST /api/compare-behavior (Screen 5: Side-by-side behavioral input/output evaluation)
-app.post('/api/compare-behavior', async (req: Request, res: Response) => {
-  try {
-    const state = getExperimentState();
-    const originalCode = req.body.originalCode || state.lockedOriginalCode || state.originalCode;
-    const refactoredCode = req.body.refactoredCode || state.models.gemini.code || state.models.chatgpt.code || state.models.claude.code;
-
-    if (!originalCode || !refactoredCode) {
-      return res.status(400).json({
-        success: false,
-        error: 'Both original and refactored code are required for comparison.',
-      });
-    }
-
-    const result = await compareBehavior(originalCode, refactoredCode, req.body.functionName);
-    state.behaviorComparison = result;
-    saveExperimentState(state);
-
-    res.json({ success: true, result });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// 10. POST /api/analyze-contract (Static contract & signature analysis)
-app.post('/api/analyze-contract', (req: Request, res: Response) => {
-  try {
-    const { code } = req.body;
-    if (!code || typeof code !== 'string') {
-      return res.status(400).json({ success: false, error: 'Code is required.' });
-    }
-
-    const { targets, overallNonDeterministic, nonDeterministicReason } = detectExportTargets(code);
-    const metrics = calculateMetrics(code);
-
-    res.json({
-      success: true,
-      targets,
-      metrics,
-      isNonDeterministic: overallNonDeterministic,
-      nonDeterministicReason,
-    });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// 11. GET /api/export/csv
+// 6. GET /api/export/csv
 app.get('/api/export/csv', (req: Request, res: Response) => {
   try {
     const state = getExperimentState();
@@ -503,7 +343,7 @@ app.get('/api/export/csv', (req: Request, res: Response) => {
   }
 });
 
-// 12. GET /api/export/json
+// 7. GET /api/export/json
 app.get('/api/export/json', (req: Request, res: Response) => {
   try {
     const state = getExperimentState();
@@ -515,7 +355,7 @@ app.get('/api/export/json', (req: Request, res: Response) => {
   }
 });
 
-// 13. POST /api/reset
+// 8. POST /api/reset
 app.post('/api/reset', (req: Request, res: Response) => {
   try {
     const state = resetExperimentState();

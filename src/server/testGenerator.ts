@@ -107,43 +107,6 @@ export interface ExportTarget {
 }
 
 /**
- * Recursively reconstructs a serialized value back into a clean JavaScript data structure
- * ensuring nested objects and arrays are reconstructed without wrapper artifacts
- */
-export function reconstructValue(valObj: any): any {
-  if (valObj === null || valObj === undefined) return valObj;
-  if (typeof valObj !== 'object') return valObj;
-  switch (valObj.type) {
-    case 'undefined':
-      return undefined;
-    case 'null':
-      return null;
-    case 'NaN':
-      return NaN;
-    case 'Infinity':
-      return Infinity;
-    case '-Infinity':
-      return -Infinity;
-    case 'number':
-    case 'string':
-    case 'boolean':
-      return valObj.val;
-    case 'array':
-      return Array.isArray(valObj.val) ? valObj.val.map(reconstructValue) : [];
-    case 'object': {
-      if (!valObj.val || typeof valObj.val !== 'object') return {};
-      const out: Record<string, any> = {};
-      for (const [k, v] of Object.entries(valObj.val)) {
-        out[k] = reconstructValue(v);
-      }
-      return out;
-    }
-    default:
-      return valObj.val !== undefined ? valObj.val : undefined;
-  }
-}
-
-/**
  * Detects non-deterministic or side-effecting code
  */
 export function checkNonDeterminism(code: string): { isNonDeterministic: boolean; reason?: string } {
@@ -762,8 +725,11 @@ fs.writeFileSync('recorded_outcomes.json', JSON.stringify(results), 'utf8');
           } else if (['number', 'string', 'boolean'].includes(valObj.type)) {
             testLines.push(`      expect(fn(${inpLiteral})).toBe(${JSON.stringify(valObj.val)});`);
           } else if (valObj.type === 'array' || valObj.type === 'object') {
-            const rawVal = reconstructValue(valObj);
-            const expLiteral = safeSerializeLiteral(rawVal);
+            const expLiteral = safeSerializeLiteral(
+              valObj.type === 'array'
+                ? valObj.val.map((x: any) => x.val)
+                : Object.fromEntries(Object.entries(valObj.val).map(([k, v]: [string, any]) => [k, v.val]))
+            );
             testLines.push(`      expect(fn(${inpLiteral})).toEqual(${expLiteral});`);
           } else {
             testLines.push(`      expect(fn(${inpLiteral})).toBeDefined();`);
@@ -783,11 +749,7 @@ fs.writeFileSync('recorded_outcomes.json', JSON.stringify(results), 'utf8');
         else if (valObj.type === 'null') expectedOutcome = 'returns null';
         else if (valObj.type === 'NaN') expectedOutcome = 'returns NaN';
         else if (['number', 'string', 'boolean'].includes(valObj.type)) expectedOutcome = `returns ${JSON.stringify(valObj.val)}`;
-        else if (valObj.type === 'array' || valObj.type === 'object') {
-          const raw = reconstructValue(valObj);
-          const serialized = JSON.stringify(raw);
-          expectedOutcome = `returns ${serialized && serialized.length < 40 ? serialized : valObj.type}`;
-        }
+        else if (valObj.type === 'array' || valObj.type === 'object') expectedOutcome = `returns ${valObj.type}`;
       } else if (rec.outcome.status === 'error') {
         expectedOutcome = `throws ${rec.outcome.errorType || 'Error'}`;
       } else if (rec.outcome.status === 'render') {

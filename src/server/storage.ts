@@ -50,16 +50,6 @@ export interface ModelResult {
   };
   complexityComparison: 'improved' | 'worse' | 'same' | 'Unavailable';
   maintainabilityComparison: 'improved' | 'worse' | 'same' | 'Unavailable';
-  failureExplanations?: Array<{
-    testTitle: string;
-    category: string;
-    plainEnglishExplanation: string;
-    expectedBehavior: string;
-    actualBehavior: string;
-    inputDescription?: string;
-    interpretation: string;
-    recommendedAction: string;
-  }>;
 }
 
 export interface ModelEntry {
@@ -118,16 +108,11 @@ export interface GeneratedTestsState {
 }
 
 export interface ExperimentState {
-  step: 1 | 2 | 3 | 4 | 5 | 6; // 1: Original Code, 2: Prompt, 3: AI Refactor, 4: Tests & Mutation, 5: Behavioral Diff, 6: Static Analysis & Results
+  step: 1 | 2 | 3 | 4; // 1: Source Code, 2: Tests, 3: Refactoring, 4: Results
   originalCode: string;
   lockedOriginalCode: string;
   generatedTests: GeneratedTestsState;
   lockedTestFileCode: string;
-  refactoringPrompt?: string;
-  refactoringMode?: 'preserve_behavior' | 'refactor_and_fix';
-  selectedModel?: 'gemini' | 'chatgpt' | 'claude' | 'manual';
-  mutationTesting?: any;
-  behaviorComparison?: any;
   strategy: 'basic' | 'structured' | 'test_aware';
   strategyLocked: boolean;
   models: {
@@ -145,11 +130,6 @@ export function getDefaultState(): ExperimentState {
     originalCode: '',
     lockedOriginalCode: '',
     lockedTestFileCode: '',
-    refactoringPrompt: '',
-    refactoringMode: 'preserve_behavior',
-    selectedModel: 'gemini',
-    mutationTesting: null,
-    behaviorComparison: null,
     generatedTests: {
       hasGenerated: false,
       seed: 42,

@@ -14,14 +14,6 @@ export interface CoverageMetrics {
   functionsPct: number | 'Unavailable';
 }
 
-export interface FailingTestDetail {
-  title: string;
-  failureMessage: string;
-  expected?: string;
-  received?: string;
-  simpleExplanation: string;
-}
-
 export interface TestExecutionResult {
   status: 'PASS' | 'FAIL' | 'ERROR';
   passed: number;
@@ -31,74 +23,10 @@ export interface TestExecutionResult {
   passRate: string;
   behaviourPreserved: string;
   coverage: CoverageMetrics;
-  failingTests: FailingTestDetail[];
+  failingTests: Array<{ title: string; failureMessage: string }>;
   runnerError: string | null;
   compileErrors: string | null;
   timeouts: number;
-}
-
-export function parseFailureMessage(
-  title: string,
-  rawMessage: string
-): { expected?: string; received?: string; simpleExplanation: string } {
-  const cleanMsg = filterNodeWarnings(rawMessage).replace(/\u001b\[[0-9;]*m/g, ''); // strip ANSI
-
-  let expected = '';
-  let received = '';
-
-  const expMatch = cleanMsg.match(/Expected(?:\s+value)?:\s*([^\n]+)/i);
-  if (expMatch) expected = expMatch[1].trim();
-
-  const recMatch = cleanMsg.match(/Received(?:\s+value)?:\s*([^\n]+)/i);
-  if (recMatch) received = recMatch[1].trim();
-
-  if (!expected || !received) {
-    const lines = cleanMsg.split('\n');
-    for (const l of lines) {
-      const trimmed = l.trim();
-      if (!expected && trimmed.startsWith('- ') && !trimmed.startsWith('- Expected')) {
-        expected = trimmed.slice(2).trim();
-      }
-      if (!received && trimmed.startsWith('+ ') && !trimmed.startsWith('+ Received')) {
-        received = trimmed.slice(2).trim();
-      }
-    }
-  }
-
-  let simpleExplanation = '';
-
-  if (cleanMsg.includes('toThrow') && cleanMsg.includes('did not throw')) {
-    simpleExplanation =
-      'The original baseline threw an error on this invalid input, but your refactored code completed without throwing.';
-  } else if (
-    cleanMsg.includes('TypeError:') ||
-    cleanMsg.includes('ReferenceError:') ||
-    cleanMsg.includes('Cannot read properties of')
-  ) {
-    const errorLine =
-      cleanMsg
-        .split('\n')
-        .find((l) => l.includes('Error:') || l.includes('Cannot read properties'))
-        ?.trim() || 'Runtime Exception';
-    simpleExplanation = `The refactored code crashed with runtime error: "${errorLine}". The original code handled this input safely. Check null/undefined guards.`;
-  } else if (expected && received) {
-    if (expected === '"Guest"' && (received === '""' || received === "''")) {
-      simpleExplanation =
-        'The original code returned "Guest" for empty or whitespace strings (e.g. "   "), but the refactored code returned "". Make sure user.trim() falls back to "Guest" when empty.';
-    } else {
-      simpleExplanation = `Mismatch on return value. The original code returned ${expected}, but your refactored code returned ${received}.`;
-    }
-  } else {
-    const firstNonEmpty =
-      cleanMsg
-        .split('\n')
-        .map((l) => l.trim())
-        .find((l) => l.length > 5 && !l.startsWith('at ') && !l.startsWith('Error:')) ||
-      cleanMsg.slice(0, 120);
-    simpleExplanation = `Test assertion failed: ${firstNonEmpty}.`;
-  }
-
-  return { expected: expected || undefined, received: received || undefined, simpleExplanation };
 }
 
 export async function runUntrustedCodeTests(
@@ -285,15 +213,10 @@ export async function runUntrustedCodeTests(
               if (Array.isArray(suite.assertionResults)) {
                 for (const assertion of suite.assertionResults) {
                   if (assertion.status === 'failed') {
-                    const rawMsg = (assertion.failureMessages || []).join('\n') || 'Assertion failed';
-                    const title = assertion.fullName || assertion.title || 'Unnamed test';
-                    const parsedFailure = parseFailureMessage(title, rawMsg);
                     failingTests.push({
-                      title,
-                      failureMessage: rawMsg,
-                      expected: parsedFailure.expected,
-                      received: parsedFailure.received,
-                      simpleExplanation: parsedFailure.simpleExplanation,
+                      title: assertion.fullName || assertion.title || 'Unnamed test',
+                      failureMessage:
+                        (assertion.failureMessages || []).join('\n') || 'Assertion failed',
                     });
                   }
                 }
