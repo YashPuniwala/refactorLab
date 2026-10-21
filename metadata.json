@@ -1,0 +1,6 @@
+{
+  "name": "RefactorLab - AI Code Refactoring Evaluation",
+  "description": "Evaluate and compare AI code refactoring across ChatGPT, Claude, and Gemini with baseline testing, ESLint checks, and code quality metrics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
